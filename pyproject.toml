@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "warp-cudss"
+version = "0.1.0"
+description = "cuDSS-backed sparse direct solver helpers for NVIDIA Warp, as a drop-in for warp.optim.linear iterative solvers"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Alec Jacobson" }]
+dependencies = [
+    "warp-lang>=1.5.0",
+]
+
+[project.optional-dependencies]
+test = ["pytest", "scipy", "numpy"]
+
+[project.urls]
+Homepage = "https://github.com/alecjacobson/warp-cuDSS"
+
+[tool.setuptools.packages.find]
+include = ["warp_cudss*"]
