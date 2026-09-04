@@ -39,6 +39,30 @@ import warp_cudss
 warp_cudss.solve(A, b, x, mtype="spd")  # A: warp.sparse.BsrMatrix, b/x: wp.array
 ```
 
+Self-contained runnable example (5-point Laplacian on a 1D chain):
+
+```python
+import numpy as np
+import warp as wp
+import warp.sparse as sparse
+import warp_cudss
+
+wp.init()
+device = "cuda:0"
+
+n = 5
+rows = wp.array(np.arange(n), dtype=wp.int32, device=device)
+cols = wp.array(np.arange(n), dtype=wp.int32, device=device)
+vals = wp.array(np.full(n, 4.0), dtype=wp.float64, device=device)
+A = sparse.bsr_from_triplets(n, n, rows, cols, vals)  # diag(4, 4, 4, 4, 4)
+
+b = wp.array(np.array([1.0, 2.0, 3.0, 4.0, 5.0]), dtype=wp.float64, device=device)
+x = wp.zeros(n, dtype=wp.float64, device=device)
+
+warp_cudss.solve(A, b, x, mtype="spd")
+print(x.numpy())  # [0.25 0.5  0.75 1.   1.25]
+```
+
 `mtype` is one of `"general"` (default, always correct), `"symmetric"`, `"spd"`,
 `"hermitian"`, `"hpd"` — pick the tightest one that actually describes your matrix for
 the best performance.
@@ -84,9 +108,20 @@ for _ in range(num_steps):
     wp.capture_launch(capture.graph)
 ```
 
-All arrays referenced by the solver (`A`'s CSR storage, `x`, `b`) must keep a stable
-device address for the solver's lifetime — don't reallocate them between `setup()` and
-later `refactor()`/`solve()` calls.
+**Capture is only valid as long as `A`'s sparsity pattern (its row/column structure) is
+unchanged from what `setup()` last saw.** `setup()`'s analysis + first factorization
+size and allocate cuDSS's internal workspace/factor buffers for that specific pattern;
+`refactor()`/`solve()` reuse those buffers, which is exactly what's safe to record into
+a graph. Changing values in place (`assemble_matrix_values(A)` above) and re-running
+`refactor()` is fine and expected. If the *pattern* changes, the buffer sizes may no
+longer be valid — you need to call `setup()` again outside capture and re-capture the
+graph. The same stability requirement applies to array addresses: `A`'s CSR storage,
+`x`, and `b` must keep a stable device address for the solver's lifetime — don't
+reallocate them between `setup()` and later `refactor()`/`solve()` calls.
+
+A full runnable version of this pattern, including on-device value updates via a Warp
+kernel and multiple graph replays, is in
+[`examples/example_graph_capture_timestepping.py`](examples/example_graph_capture_timestepping.py).
 
 ## Examples
 
