@@ -31,20 +31,24 @@ export CUDSS_LIBRARY_PATH=/path/to/libcudss.so.0
 
 ## Quick start
 
-Same call shape as `warp.optim.linear.cg(A, b, x, ...)`:
+`warp_cudss.solve` takes the same `(A, b, x)` arguments as the iterative solvers in
+`warp.optim.linear` — swapping one for the other is a one-line change:
 
-```python
-import warp_cudss
+```diff
+-import warp.optim.linear as linear
++import warp_cudss
 
-warp_cudss.solve(A, b, x, mtype="spd")  # A: warp.sparse.BsrMatrix, b/x: wp.array
+-linear.cg(A, b, x, tol=1e-6)
++warp_cudss.solve(A, b, x, mtype="spd")
 ```
 
-Self-contained runnable example (5-point Laplacian on a 1D chain):
+Self-contained runnable example (5-point Laplacian on a 1D chain), solved both ways:
 
 ```python
 import numpy as np
 import warp as wp
 import warp.sparse as sparse
+import warp.optim.linear as linear
 import warp_cudss
 
 wp.init()
@@ -57,8 +61,14 @@ vals = wp.array(np.full(n, 4.0), dtype=wp.float64, device=device)
 A = sparse.bsr_from_triplets(n, n, rows, cols, vals)  # diag(4, 4, 4, 4, 4)
 
 b = wp.array(np.array([1.0, 2.0, 3.0, 4.0, 5.0]), dtype=wp.float64, device=device)
-x = wp.zeros(n, dtype=wp.float64, device=device)
 
+# before: warp's built-in iterative conjugate-gradient solver
+x = wp.zeros(n, dtype=wp.float64, device=device)
+linear.cg(A, b, x, tol=1e-6)
+print(x.numpy())  # [0.25 0.5  0.75 1.   1.25]
+
+# after: cuDSS direct solve, same A/b, same result
+x = wp.zeros(n, dtype=wp.float64, device=device)
 warp_cudss.solve(A, b, x, mtype="spd")
 print(x.numpy())  # [0.25 0.5  0.75 1.   1.25]
 ```
