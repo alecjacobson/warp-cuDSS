@@ -140,23 +140,29 @@ class CudssSolver:
 
     # -- lifecycle -----------------------------------------------------
 
-    def setup(self, A, x: wp.array, b: wp.array) -> "CudssSolver":
+    def setup(self, A, x: wp.array, b: wp.array, nrhs: int = 1) -> "CudssSolver":
         """(Re)build the CSR/dense descriptors from ``A``'s sparsity pattern, then run the
         analysis and first factorization phases.
 
         Call this once, and again whenever ``A``'s sparsity pattern changes (not merely its
         values). Not graph-capturable: it may synchronize with the host and allocate memory.
+
+        ``nrhs`` sets the number of right-hand sides solved together. With ``nrhs > 1``,
+        ``x`` and ``b`` must each hold ``n * nrhs`` scalars laid out column-major (right-hand
+        side ``j`` occupying ``[j*n, (j+1)*n)``); cuDSS then back-substitutes all columns in a
+        single solve, which is far cheaper than ``nrhs`` separate solves.
         """
         if A.device != self.device:
             raise ValueError(f"Matrix device {A.device} does not match solver device {self.device}")
 
         n = A.shape[0]
+        self._nrhs = nrhs
         if A.shape[0] != A.shape[1]:
             raise ValueError(f"cuDSS solver requires a square matrix, got shape {A.shape}")
-        if _scalar_length(x) != n or _scalar_length(b) != n:
+        if _scalar_length(x) != n * nrhs or _scalar_length(b) != n * nrhs:
             raise ValueError(
-                f"x and b must have {n} scalar entries to match A's shape {A.shape}, "
-                f"got {_scalar_length(x)} and {_scalar_length(b)}"
+                f"x and b must have {n * nrhs} scalar entries to match A's shape {A.shape} with "
+                f"nrhs={nrhs}, got {_scalar_length(x)} and {_scalar_length(b)}"
             )
 
         self._destroy_descriptors()
@@ -189,7 +195,7 @@ class CudssSolver:
         x_desc = cudssMatrix_t()
         _check(
             self._lib.cudssMatrixCreateDn(
-                ctypes.byref(x_desc), n, 1, n, ctypes.c_void_p(x.ptr), value_type, CUDSS_LAYOUT_COL_MAJOR
+                ctypes.byref(x_desc), n, nrhs, n, ctypes.c_void_p(x.ptr), value_type, CUDSS_LAYOUT_COL_MAJOR
             ),
             "cudssMatrixCreateDn(x)",
         )
@@ -198,7 +204,7 @@ class CudssSolver:
         b_desc = cudssMatrix_t()
         _check(
             self._lib.cudssMatrixCreateDn(
-                ctypes.byref(b_desc), n, 1, n, ctypes.c_void_p(b.ptr), value_type, CUDSS_LAYOUT_COL_MAJOR
+                ctypes.byref(b_desc), n, nrhs, n, ctypes.c_void_p(b.ptr), value_type, CUDSS_LAYOUT_COL_MAJOR
             ),
             "cudssMatrixCreateDn(b)",
         )

@@ -54,3 +54,25 @@ def test_scalar_float32(device):
 
     x_ref = np.linalg.solve(dense.astype(np.float32), b_np)
     np.testing.assert_allclose(x.numpy(), x_ref, atol=1e-3, rtol=1e-3)
+
+
+def test_multi_rhs_solve(device):
+    """Solving k right-hand sides at once (nrhs>1) matches k independent solves."""
+    rng = np.random.default_rng(1)
+    n, k = 150, 5
+    A, dense = random_sparse_spd(rng, n, device=device)
+
+    B_np = rng.standard_normal((n, k))
+    # cuDSS dense matrices are column-major: stack the columns contiguously.
+    b = wp.array(B_np.flatten(order="F"), dtype=wp.float64, device=device)
+    x = wp.zeros(n * k, dtype=wp.float64, device=device)
+
+    solver = warp_cudss.CudssSolver(mtype="spd", device=device)
+    solver.setup(A, x, b, nrhs=k)
+    solver.solve()
+    wp.synchronize()
+    solver.release()
+
+    X = x.numpy().reshape(n, k, order="F")
+    X_ref = np.linalg.solve(dense, B_np)
+    np.testing.assert_allclose(X, X_ref, atol=1e-8, rtol=1e-8)

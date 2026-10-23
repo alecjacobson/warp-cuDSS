@@ -203,10 +203,6 @@ _LIBRARY_CANDIDATES = (
 
 
 def _candidate_paths():
-    env_path = os.environ.get("CUDSS_LIBRARY_PATH")
-    if env_path:
-        yield env_path
-
     for name in _LIBRARY_CANDIDATES:
         yield name
 
@@ -229,20 +225,32 @@ _lib = None
 
 
 def get_library():
-    """Load (once) and return the cuDSS shared library with configured argtypes."""
+    """Load once; an explicit library override must succeed without fallback.
+
+    Selection is cached for the process lifetime. Changing the environment after
+    the first successful load does not replace the library under live objects.
+    """
     global _lib
     if _lib is not None:
         return _lib
 
     last_error = None
     lib = None
-    for path in _candidate_paths():
+    explicit = os.environ.get("CUDSS_LIBRARY_PATH")
+    if explicit:
         try:
-            lib = ctypes.CDLL(path)
-            break
-        except OSError as e:
-            last_error = e
-            continue
+            lib = ctypes.CDLL(explicit)
+        except OSError as error:
+            raise OSError(
+                f"Could not load explicitly requested cuDSS library {explicit!r}: {error}"
+            ) from error
+    else:
+        for path in _candidate_paths():
+            try:
+                lib = ctypes.CDLL(path)
+                break
+            except OSError as error:
+                last_error = error
 
     if lib is None:
         raise OSError(
