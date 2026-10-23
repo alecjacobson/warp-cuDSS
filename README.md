@@ -36,6 +36,12 @@ otherwise setup raises an error instead of falling back to another cuDSS install
 Library selection is cached after the first successful load. Set the variable before
 using the solver, and use a new process to select a different library.
 
+Native resources are released if construction fails, including partial objects returned
+by a failing cuDSS create call. If a later `setup()` fails, close the solver (or use
+it as a context manager) to release its partially constructed matrix descriptors.
+`release()` attempts every owned native object and is idempotent; an explicit
+cleanup error is reported after the remaining objects have been processed.
+
 ## Quick start
 
 `warp_cudss.solve` takes the same `(A, b, x)` arguments as the iterative solvers in

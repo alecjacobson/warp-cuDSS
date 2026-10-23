@@ -28,10 +28,12 @@ stable device address for the lifetime of the solver: do not reallocate them bet
 from __future__ import annotations
 
 import ctypes
+from contextlib import suppress
 
 import warp as wp
 
 from ._bindings import (
+    CUDA_R_32I,
     CUDSS_BASE_ZERO,
     CUDSS_CONFIG_IR_N_STEPS,
     CUDSS_CONFIG_REORDERING_ALG,
@@ -40,7 +42,6 @@ from ._bindings import (
     CUDSS_PHASE_FACTORIZATION,
     CUDSS_PHASE_REFACTORIZATION,
     CUDSS_PHASE_SOLVE,
-    CUDA_R_32I,
     MTYPE,
     MVIEW,
     REORDERING_ALG,
@@ -85,10 +86,19 @@ class CudssSolver:
         ir_steps: int = 0,
         device=None,
     ):
+        self._handle = self._config = self._data = None
+        self._csr = self._A_desc = self._x_desc = self._b_desc = None
+        self._x = self._b = None
+        self._analyzed = False
+        self._closed = False
+
         if mtype not in MTYPE:
             raise ValueError(f"Unknown mtype {mtype!r}, expected one of {sorted(MTYPE)}")
         if view not in MVIEW:
             raise ValueError(f"Unknown view {view!r}, expected one of {sorted(MVIEW)}")
+
+        if reordering not in REORDERING_ALG:
+            raise ValueError(f"Unknown reordering {reordering!r}, expected one of {sorted(REORDERING_ALG)}")
 
         self.device = wp.get_device(device)
         if not self.device.is_cuda:
@@ -97,50 +107,45 @@ class CudssSolver:
         self.mtype = mtype
         self.view = view
 
-        self._lib = get_library()
+        try:
+            self._lib = get_library()
 
-        handle = cudssHandle_t()
-        _check(self._lib.cudssCreate(ctypes.byref(handle)), "cudssCreate")
-        self._handle = handle
+            self._handle = handle = cudssHandle_t()
+            _check(self._lib.cudssCreate(ctypes.byref(handle)), "cudssCreate")
 
-        config = cudssConfig_t()
-        _check(self._lib.cudssConfigCreate(ctypes.byref(config)), "cudssConfigCreate")
-        self._config = config
+            self._config = config = cudssConfig_t()
+            _check(self._lib.cudssConfigCreate(ctypes.byref(config)), "cudssConfigCreate")
 
-        data = cudssData_t()
-        _check(self._lib.cudssDataCreate(handle, ctypes.byref(data)), "cudssDataCreate")
-        self._data = data
+            self._data = data = cudssData_t()
+            _check(self._lib.cudssDataCreate(handle, ctypes.byref(data)), "cudssDataCreate")
 
-        stream = wp.get_stream(self.device)
-        _check(self._lib.cudssSetStream(handle, ctypes.c_void_p(stream.cuda_stream)), "cudssSetStream")
+            stream = wp.get_stream(self.device)
+            _check(self._lib.cudssSetStream(handle, ctypes.c_void_p(stream.cuda_stream)), "cudssSetStream")
 
-        if reordering != "default":
-            alg = ctypes.c_int(REORDERING_ALG[reordering])
-            _check(
-                self._lib.cudssConfigSet(config, CUDSS_CONFIG_REORDERING_ALG, ctypes.byref(alg), ctypes.sizeof(alg)),
-                "cudssConfigSet(REORDERING_ALG)",
-            )
-        if ir_steps:
-            n_steps = ctypes.c_int(ir_steps)
-            _check(
-                self._lib.cudssConfigSet(
-                    config, CUDSS_CONFIG_IR_N_STEPS, ctypes.byref(n_steps), ctypes.sizeof(n_steps)
-                ),
-                "cudssConfigSet(IR_N_STEPS)",
-            )
-
-        self._csr = None
-        self._A_desc = None
-        self._x_desc = None
-        self._b_desc = None
-        self._x = None
-        self._b = None
-        self._analyzed = False
-        self._closed = False
+            if reordering != "default":
+                alg = ctypes.c_int(REORDERING_ALG[reordering])
+                _check(
+                    self._lib.cudssConfigSet(config, CUDSS_CONFIG_REORDERING_ALG, ctypes.byref(alg), ctypes.sizeof(alg)),
+                    "cudssConfigSet(REORDERING_ALG)",
+                )
+            if ir_steps:
+                n_steps = ctypes.c_int(ir_steps)
+                _check(
+                    self._lib.cudssConfigSet(
+                        config, CUDSS_CONFIG_IR_N_STEPS, ctypes.byref(n_steps), ctypes.sizeof(n_steps)
+                    ),
+                    "cudssConfigSet(IR_N_STEPS)",
+                )
+        except BaseException:
+            # Create calls may return a non-null object even when reporting an
+            # error. Preserve the original failure after attempting all cleanup.
+            with suppress(Exception):
+                self.release()
+            raise
 
     # -- lifecycle -----------------------------------------------------
 
-    def setup(self, A, x: wp.array, b: wp.array, nrhs: int = 1) -> "CudssSolver":
+    def setup(self, A, x: wp.array, b: wp.array, nrhs: int = 1) -> CudssSolver:
         """(Re)build the CSR/dense descriptors from ``A``'s sparsity pattern, then run the
         analysis and first factorization phases.
 
@@ -170,7 +175,7 @@ class CudssSolver:
         self._csr = bsr_to_scalar_csr(A)
         value_type = _cudss_value_type(self._csr.scalar_type)
 
-        A_desc = cudssMatrix_t()
+        self._A_desc = A_desc = cudssMatrix_t()
         _check(
             self._lib.cudssMatrixCreateCsr(
                 ctypes.byref(A_desc),
@@ -190,25 +195,22 @@ class CudssSolver:
             ),
             "cudssMatrixCreateCsr",
         )
-        self._A_desc = A_desc
 
-        x_desc = cudssMatrix_t()
+        self._x_desc = x_desc = cudssMatrix_t()
         _check(
             self._lib.cudssMatrixCreateDn(
                 ctypes.byref(x_desc), n, nrhs, n, ctypes.c_void_p(x.ptr), value_type, CUDSS_LAYOUT_COL_MAJOR
             ),
             "cudssMatrixCreateDn(x)",
         )
-        self._x_desc = x_desc
 
-        b_desc = cudssMatrix_t()
+        self._b_desc = b_desc = cudssMatrix_t()
         _check(
             self._lib.cudssMatrixCreateDn(
                 ctypes.byref(b_desc), n, nrhs, n, ctypes.c_void_p(b.ptr), value_type, CUDSS_LAYOUT_COL_MAJOR
             ),
             "cudssMatrixCreateDn(b)",
         )
-        self._b_desc = b_desc
 
         self._x = x
         self._b = b
@@ -234,7 +236,7 @@ class CudssSolver:
         self._analyzed = True
         return self
 
-    def refactor(self, A=None) -> "CudssSolver":
+    def refactor(self, A=None) -> CudssSolver:
         """Refresh matrix values (if ``A`` given) and re-run factorization.
 
         Sparsity pattern must be unchanged since :meth:`setup`. Graph-capturable once
@@ -262,7 +264,7 @@ class CudssSolver:
         )
         return self
 
-    def solve(self, x: wp.array = None, b: wp.array = None) -> "CudssSolver":
+    def solve(self, x: wp.array = None, b: wp.array = None) -> CudssSolver:
         """Run the solve phase, writing the result into ``x``.
 
         If ``x``/``b`` are omitted, reuses the arrays bound in :meth:`setup`
@@ -288,14 +290,35 @@ class CudssSolver:
         return self
 
     def release(self):
-        """Destroy all cuDSS objects owned by this solver. The solver is unusable afterwards."""
+        """Release every owned native object once; safe after partial construction."""
         if self._closed:
             return
-        self._destroy_descriptors()
-        _check(self._lib.cudssDataDestroy(self._handle, self._data), "cudssDataDestroy")
-        _check(self._lib.cudssConfigDestroy(self._config), "cudssConfigDestroy")
-        _check(self._lib.cudssDestroy(self._handle), "cudssDestroy")
+        first_error = None
+        for attribute, function in (
+            ("_A_desc", "cudssMatrixDestroy"),
+            ("_x_desc", "cudssMatrixDestroy"),
+            ("_b_desc", "cudssMatrixDestroy"),
+            ("_data", "cudssDataDestroy"),
+            ("_config", "cudssConfigDestroy"),
+            ("_handle", "cudssDestroy"),
+        ):
+            value = getattr(self, attribute)
+            if not value:
+                continue
+            arguments = (self._handle, value) if attribute == "_data" else (value,)
+            try:
+                _check(getattr(self._lib, function)(*arguments), function)
+            except Exception as error:  # noqa: BLE001 - finish cleanup, then re-raise
+                if first_error is None:
+                    first_error = error
+            finally:
+                # Destroy calls attempt cleanup even when reporting a pending
+                # CUDA error. Do not destroy the same native pointer twice.
+                setattr(self, attribute, None)
+        self._analyzed = False
         self._closed = True
+        if first_error is not None:
+            raise first_error
 
     def __enter__(self):
         return self
@@ -304,10 +327,8 @@ class CudssSolver:
         self.release()
 
     def __del__(self):
-        try:
+        with suppress(Exception):
             self.release()
-        except Exception:
-            pass
 
     # -- internals -------------------------------------------------------
 
@@ -316,12 +337,20 @@ class CudssSolver:
             raise RuntimeError("CudssSolver.setup(A, x, b) must be called before solve()/refactor()")
 
     def _destroy_descriptors(self):
+        self._analyzed = False
+        first_error = None
         for attr in ("_A_desc", "_x_desc", "_b_desc"):
             desc = getattr(self, attr, None)
             if desc:
-                _check(self._lib.cudssMatrixDestroy(desc), f"cudssMatrixDestroy({attr})")
-                setattr(self, attr, None)
-        self._analyzed = False
+                try:
+                    _check(self._lib.cudssMatrixDestroy(desc), f"cudssMatrixDestroy({attr})")
+                except Exception as error:  # noqa: BLE001 - finish cleanup, then re-raise
+                    if first_error is None:
+                        first_error = error
+                finally:
+                    setattr(self, attr, None)
+        if first_error is not None:
+            raise first_error
 
 
 def solve(
