@@ -29,6 +29,11 @@ If the library isn't found automatically (via `ctypes.util.find_library`, the
 export CUDSS_LIBRARY_PATH=/path/to/libcudss.so.0
 ```
 
+An explicit path must load successfully, including its shared-library dependencies;
+otherwise setup raises an error instead of falling back to another cuDSS installation.
+Library selection is cached after the first successful load. Set the variable before
+using the solver, and use a new process to select a different library.
+
 ## Quick start
 
 `warp_cudss.solve` takes the same `(A, b, x)` arguments as the iterative solvers in
