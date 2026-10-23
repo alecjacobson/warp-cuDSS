@@ -8,7 +8,8 @@ when iterative convergence is unreliable.
 
 Everything stays on-device: matrix and vector data are passed to
 [cuDSS](https://docs.nvidia.com/cuda/cudss/) by raw device pointer, and repeated
-refactor+solve calls are safe to record into a CUDA graph via `wp.ScopedCapture`.
+refactor+solve calls using a capture-compatible pivot policy can be recorded into
+a CUDA graph via `wp.ScopedCapture`.
 
 ## Install
 
@@ -178,3 +179,21 @@ integration notes this package is based on. In short:
 ## License
 
 Apache-2.0, matching Warp itself.
+
+## Explicit pivot policy
+
+`CudssSolver(..., pivoting="auto")` preserves the vendor default. An explicit
+policy such as `pivoting="diagonal"` is applied before analysis. Available names
+are `auto`, `none`, `global_col`, `global_row`, `diagonal`, `local_block`, and
+`bunch_kaufman`; support depends on the cuDSS version, matrix type and reordering.
+Unsupported native combinations raise a cuDSS error. The convenience `solve()`
+function retains AUTO; construct `CudssSolver` directly for an explicit policy.
+
+In cuDSS 1.0, AUTO can select Bunch–Kaufman for symmetric/Hermitian indefinite
+matrices. Those solves are synchronous and cannot be graph-captured. Explicit
+diagonal pivoting supports capture but lacks Bunch–Kaufman's stable 2×2 pivot
+blocks. Validate the original-system residual for your matrices before choosing
+it. This option does not change the tested 0.8 dependency pin or imply that every
+1.0 configuration has been qualified. See the
+[NVIDIA pivot-policy documentation](https://docs.nvidia.com/cuda/cudss/latest/types.html#c.cudssPivotType_t)
+and [Warpack #189](https://github.com/alecjacobson/warpack/issues/189).

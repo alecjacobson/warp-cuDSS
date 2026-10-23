@@ -176,6 +176,18 @@ REORDERING_ALG = {
     "none": CUDSS_REORDERING_ALG_NONE,
 }
 
+# cudssPivotType_t is ABI-compatible in 0.8/1.0. Bunch-Kaufman is reserved
+# (unsupported) in 0.8 and available, but not stream-capturable, in 1.0.
+PIVOT_TYPE = {
+    "auto": 0,
+    "none": 1,
+    "global_col": 2,
+    "global_row": 3,
+    "diagonal": 4,
+    "local_block": 5,
+    "bunch_kaufman": 6,
+}
+
 # Opaque handles are just void* to us.
 cudssHandle_t = ctypes.c_void_p
 cudssMatrix_t = ctypes.c_void_p
