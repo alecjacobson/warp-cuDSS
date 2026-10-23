@@ -13,17 +13,19 @@ refactor+solve calls are safe to record into a CUDA graph via `wp.ScopedCapture`
 ## Install
 
 Requires an NVIDIA GPU, a Warp build with CUDA support, and the cuDSS shared library
-(`libcudss.so.0`, cuDSS >= 0.8), available either via your system package manager, the
+(`libcudss.so.0`, cuDSS 0.8), available either via your system package manager, the
 [`nvidia-cudss-cu12`](https://pypi.org/project/nvidia-cudss-cu12/) pip wheel, or the
 [cuDSS download page](https://developer.nvidia.com/cudss-downloads).
 
 ```bash
-pip install nvidia-cudss-cu12  # or install cuDSS via your system package manager
+pip install nvidia-cudss-cu12==0.8.0.10
 pip install -e .
 ```
 
-If the library isn't found automatically (via `ctypes.util.find_library`, the
-`nvidia-cudss-cu12` wheel layout, or the platform loader path), point at it explicitly:
+The tested wheel is cuDSS 0.8.0.10; cuDSS 1.0 qualification is tracked in
+[Warpack #189](https://github.com/alecjacobson/warpack/issues/189).
+Automatic discovery checks installed wheel metadata, legacy NVIDIA package layouts,
+and system loader paths. To select a library explicitly:
 
 ```bash
 export CUDSS_LIBRARY_PATH=/path/to/libcudss.so.0

@@ -14,6 +14,7 @@ from __future__ import annotations
 import ctypes
 import ctypes.util
 import os
+from importlib.metadata import PackageNotFoundError, distribution
 
 __all__ = [
     "CudssError",
@@ -214,11 +215,23 @@ def _candidate_paths():
     try:
         import nvidia.cudss  # noqa: PLC0415
 
-        pkg_dir = os.path.dirname(nvidia.cudss.__file__)
-        for name in _LIBRARY_CANDIDATES:
-            yield os.path.join(pkg_dir, "lib", name)
+        package_file = getattr(nvidia.cudss, "__file__", None)
+        if package_file is not None:
+            pkg_dir = os.path.dirname(package_file)
+            for name in _LIBRARY_CANDIDATES:
+                yield os.path.join(pkg_dir, "lib", name)
     except ImportError:
         pass
+
+    # Recent supported wheels use nvidia/cu12/lib rather than nvidia/cudss/lib.
+    # Read installed metadata instead of assuming an importable package layout.
+    try:
+        package = distribution("nvidia-cudss-cu12")
+    except PackageNotFoundError:
+        return
+    for path in package.files or ():
+        if os.path.basename(str(path)) in _LIBRARY_CANDIDATES:
+            yield str(package.locate_file(path))
 
 
 _lib = None
