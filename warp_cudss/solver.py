@@ -36,6 +36,7 @@ from ._bindings import (
     CUDA_R_32I,
     CUDSS_BASE_ZERO,
     CUDSS_CONFIG_IR_N_STEPS,
+    CUDSS_CONFIG_PIVOT_TYPE,
     CUDSS_CONFIG_REORDERING_ALG,
     CUDSS_LAYOUT_COL_MAJOR,
     CUDSS_PHASE_ANALYSIS,
@@ -44,6 +45,7 @@ from ._bindings import (
     CUDSS_PHASE_SOLVE,
     MTYPE,
     MVIEW,
+    PIVOT_TYPE,
     REORDERING_ALG,
     _check,
     cudssConfig_t,
@@ -76,6 +78,13 @@ def _scalar_length(arr: wp.array) -> int:
 class CudssSolver:
     """Owns a cuDSS handle/config/data context and the matrix/vector descriptors for one
     sparse linear system. Not thread-safe; one instance per system being solved.
+
+    ``pivoting="auto"`` preserves the vendor default. An explicit policy such
+    as ``"diagonal"`` is set before analysis. Supported matrix/reordering
+    combinations depend on cuDSS. In 1.0, AUTO may select Bunch-Kaufman for
+    symmetric/Hermitian indefinite matrices; that method is not capturable.
+    Diagonal pivoting is capturable but lacks stable 2x2 pivot blocks, so check
+    the original-system accuracy when selecting it for an indefinite matrix.
     """
 
     def __init__(
@@ -85,6 +94,8 @@ class CudssSolver:
         reordering: str = "default",
         ir_steps: int = 0,
         device=None,
+        *,
+        pivoting: str = "auto",
     ):
         self._handle = self._config = self._data = None
         self._csr = self._A_desc = self._x_desc = self._b_desc = None
@@ -99,6 +110,8 @@ class CudssSolver:
 
         if reordering not in REORDERING_ALG:
             raise ValueError(f"Unknown reordering {reordering!r}, expected one of {sorted(REORDERING_ALG)}")
+        if pivoting not in PIVOT_TYPE:
+            raise ValueError(f"Unknown pivoting {pivoting!r}, expected one of {sorted(PIVOT_TYPE)}")
 
         self.device = wp.get_device(device)
         if not self.device.is_cuda:
@@ -106,6 +119,7 @@ class CudssSolver:
 
         self.mtype = mtype
         self.view = view
+        self.pivoting = pivoting
 
         try:
             self._lib = get_library()
@@ -127,6 +141,14 @@ class CudssSolver:
                 _check(
                     self._lib.cudssConfigSet(config, CUDSS_CONFIG_REORDERING_ALG, ctypes.byref(alg), ctypes.sizeof(alg)),
                     "cudssConfigSet(REORDERING_ALG)",
+                )
+            if pivoting != "auto":
+                policy = ctypes.c_int(PIVOT_TYPE[pivoting])
+                _check(
+                    self._lib.cudssConfigSet(
+                        config, CUDSS_CONFIG_PIVOT_TYPE, ctypes.byref(policy), ctypes.sizeof(policy)
+                    ),
+                    "cudssConfigSet(PIVOT_TYPE)",
                 )
             if ir_steps:
                 n_steps = ctypes.c_int(ir_steps)
